@@ -21,7 +21,7 @@ def load_data() -> pd.DataFrame:
             DELIVERY_DAYS,
             LATE,
             REGION
-        FROM CLEANED_REVIEWS
+        FROM AVALANCHE_DB.AVALANCHE_SCHEMA.CLEANED_REVIEWS
         WHERE REVIEW_TEXT IS NOT NULL
           AND TRIM(REVIEW_TEXT) <> ''
     """
