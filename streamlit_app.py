@@ -4,10 +4,24 @@ import pandas as pd
 st.set_page_config(page_title="Avalanche App", layout="wide")
 
 # --- Snowflake connection via Streamlit Secrets (Community Cloud) ---
-# Requires a [snowflake] block in Streamlit Cloud -> Settings -> Secrets
 @st.cache_data(ttl=600)
 def load_data() -> pd.DataFrame:
-    conn = st.connection("snowflake")  # uses Streamlit's Snowflake connector
+    conn = st.connection("snowflake")
+
+    # 🔎 TEMP DEBUG — confirms Snowflake identity + context
+    debug_df = conn.query("""
+        SELECT
+            CURRENT_ACCOUNT()  AS account,
+            CURRENT_USER()     AS user,
+            CURRENT_ROLE()     AS role,
+            CURRENT_WAREHOUSE() AS warehouse,
+            CURRENT_DATABASE() AS db,
+            CURRENT_SCHEMA()   AS schema
+    """)
+    st.subheader("Snowflake Session Context (debug)")
+    st.dataframe(debug_df, use_container_width=True)
+
+    # --- Main query (fully qualified, no context ambiguity) ---
     query = """
         SELECT
             ORDER_ID,
@@ -25,8 +39,11 @@ def load_data() -> pd.DataFrame:
         WHERE REVIEW_TEXT IS NOT NULL
           AND TRIM(REVIEW_TEXT) <> ''
     """
+
     return conn.query(query)
 
+
+# --- Load data ---
 df = load_data()
 
 st.title("Avalanche Customer Sentiment Dashboard")
@@ -35,9 +52,16 @@ st.title("Avalanche Customer Sentiment Dashboard")
 st.sidebar.header("Filters")
 
 products_all = sorted(df["PRODUCT"].dropna().unique().tolist())
-products = st.sidebar.multiselect("Product", options=products_all, default=products_all)
+products = st.sidebar.multiselect(
+    "Product",
+    options=products_all,
+    default=products_all
+)
 
-late_only = st.sidebar.selectbox("Delivery Status", ["ALL", "On Time", "Late"])
+late_only = st.sidebar.selectbox(
+    "Delivery Status",
+    ["ALL", "On Time", "Late"]
+)
 
 filtered_df = df[df["PRODUCT"].isin(products)].copy()
 
@@ -53,7 +77,8 @@ st.dataframe(filtered_df.head(100), use_container_width=True)
 # --- Charts ---
 st.subheader("Mean Sentiment by Product")
 by_product = (
-    filtered_df.groupby("PRODUCT")["SENTIMENT_SCORE"]
+    filtered_df
+    .groupby("PRODUCT")["SENTIMENT_SCORE"]
     .mean()
     .sort_values(ascending=False)
 )
@@ -66,6 +91,7 @@ st.bar_chart(by_late)
 # --- Quick stats ---
 st.subheader("Quick Stats")
 c1, c2, c3 = st.columns(3)
+
 c1.metric("Total Reviews", int(len(filtered_df)))
 
 avg_sent = float(filtered_df["SENTIMENT_SCORE"].mean()) if len(filtered_df) else 0.0
