@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
 
 st.set_page_config(page_title="Avalanche Customer Sentiment", layout="wide")
 
@@ -67,7 +66,6 @@ def cortex_complete(prompt: str, model: str = "snowflake-arctic") -> str:
         ) AS RESPONSE
     """
     res = conn.query(sql)
-    # Response comes back as a variant-ish string; Streamlit connector usually returns plain text
     return str(res.iloc[0]["RESPONSE"])
 
 
@@ -88,12 +86,7 @@ def build_dataset_brief(df: pd.DataFrame) -> str:
 
     # Product list (top 25 by count)
     top_products = (
-        df["PRODUCT"]
-        .dropna()
-        .value_counts()
-        .head(25)
-        .index
-        .tolist()
+        df["PRODUCT"].dropna().value_counts().head(25).index.tolist()
         if "PRODUCT" in df.columns else []
     )
 
@@ -137,7 +130,8 @@ def fetch_review_snippets(
     where = ["REVIEW_TEXT IS NOT NULL", "TRIM(REVIEW_TEXT) <> ''"]
 
     if product and product != "ALL":
-        where.append(f"PRODUCT = '{product.replace(\"'\", \"''\")}'")
+        safe_product = product.replace("'", "''")
+        where.append(f"PRODUCT = '{safe_product}'")
 
     if start_dt is not None:
         where.append(f"REVIEW_DATE >= '{start_dt.date()}'")
@@ -160,21 +154,23 @@ def fetch_review_snippets(
         ORDER BY REVIEW_DATE DESC
         LIMIT {int(max_rows)}
     """
+
     snippet_df = conn.query(sql)
 
     if snippet_df.empty:
         return "No review snippets found for the current selection."
 
-    # Render as a compact text block to embed into prompt
     lines = ["REVIEW SNIPPETS (most recent, truncated):"]
     for _, r in snippet_df.iterrows():
         rd = r.get("REVIEW_DATE")
         rd_str = str(rd)[:10] if rd is not None else "N/A"
         lines.append(
-            f"- {rd_str} | ORDER_ID={r.get('ORDER_ID')} | PRODUCT={r.get('PRODUCT')} | "
-            f"LATE={r.get('LATE')} | SENTIMENT={r.get('SENTIMENT_SCORE')} | "
+            f"- {rd_str} | ORDER_ID={r.get('ORDER_ID')} | "
+            f"PRODUCT={r.get('PRODUCT')} | LATE={r.get('LATE')} | "
+            f"SENTIMENT={r.get('SENTIMENT_SCORE')} | "
             f"TEXT=\"{str(r.get('REVIEW_SNIPPET', '')).replace(chr(10), ' ')}\""
         )
+
     return "\n".join(lines)
 
 
@@ -205,9 +201,8 @@ QUESTION:
 df = load_data()
 
 st.title("Avalanche Customer Sentiment")
-st.caption("Analyze customer review sentiment by product, date range, and delivery performance. Keep it simple: filter → interpret → act.")
+st.caption("Analyze customer review sentiment by product, date range, and delivery performance. Filter → interpret → act.")
 
-# Tabs: keep dashboard separate from AI Q&A
 tab_dashboard, tab_ask = st.tabs(["Dashboard", "Ask Reviews"])
 
 # -----------------------------
@@ -221,7 +216,6 @@ with tab_dashboard:
         st.error("No data returned from Snowflake. Check table access and filters.")
         st.stop()
 
-    # Product filter
     products_all = sorted(df["PRODUCT"].dropna().unique().tolist()) if "PRODUCT" in df.columns else []
     selected_products = st.sidebar.multiselect(
         "Product(s)",
@@ -229,7 +223,6 @@ with tab_dashboard:
         default=products_all
     )
 
-    # Date range filter (REVIEW_DATE)
     if "REVIEW_DATE" in df.columns and df["REVIEW_DATE"].notna().any():
         min_date = df["REVIEW_DATE"].dropna().min().date()
         max_date = df["REVIEW_DATE"].dropna().max().date()
@@ -242,10 +235,8 @@ with tab_dashboard:
     else:
         start_date, end_date = None, None
 
-    # Delivery filter
     late_only = st.sidebar.selectbox("Delivery Status", ["ALL", "On Time", "Late"])
 
-    # Apply filters
     filtered_df = df.copy()
 
     if selected_products:
@@ -262,7 +253,6 @@ with tab_dashboard:
     elif late_only == "On Time":
         filtered_df = filtered_df[filtered_df["LATE"] == False]
 
-    # Summary strip (interpretation)
     st.subheader("Summary")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Reviews (filtered)", int(len(filtered_df)))
@@ -273,7 +263,6 @@ with tab_dashboard:
     late_pct = (float(filtered_df["LATE"].mean()) * 100) if len(filtered_df) else 0.0
     c3.metric("Late %", round(late_pct, 1))
 
-    # A simple plain-English interpretation (high impact, low effort)
     if len(filtered_df):
         if avg_sent > 0.4:
             verdict = "Strongly positive overall."
@@ -288,11 +277,9 @@ with tab_dashboard:
 
     c4.metric("Interpretation", verdict)
 
-    # Data preview
     st.subheader("Data Preview")
     st.dataframe(filtered_df.head(100), use_container_width=True)
 
-    # Charts
     st.subheader("Mean Sentiment by Product")
     if len(filtered_df):
         by_product = (
@@ -311,7 +298,6 @@ with tab_dashboard:
     else:
         st.info("No rows to chart. Adjust filters.")
 
-    # Lightweight feedback hook (optional but aligned)
     st.divider()
     st.subheader("Feedback (quick)")
     fb = st.text_area("What was confusing or missing?", placeholder="Example: I expected a winter-only filter / I can’t tell what sentiment score means.")
@@ -324,13 +310,12 @@ with tab_dashboard:
 # -----------------------------
 with tab_ask:
     st.subheader("Ask Reviews")
-    st.caption("This answers based on the dataset brief + a small set of recent review snippets (not full RAG yet).")
+    st.caption("Answers are based on the dataset brief + a small set of recent review snippets (not full RAG yet).")
 
     if df.empty:
         st.error("No data available for Q&A.")
         st.stop()
 
-    # Keep controls minimal and explicit
     col1, col2 = st.columns([2, 1])
 
     with col1:
@@ -339,13 +324,10 @@ with tab_ask:
             placeholder="Example: What are customers complaining about for Winter goggles this month?"
         )
 
-    # Scope controls for grounding context
     with col2:
-        # product scope
         product_options = ["ALL"] + (sorted(df["PRODUCT"].dropna().unique().tolist()) if "PRODUCT" in df.columns else [])
         scope_product = st.selectbox("Scope product", options=product_options, index=0)
 
-    # Date scope
     if "REVIEW_DATE" in df.columns and df["REVIEW_DATE"].notna().any():
         min_date = df["REVIEW_DATE"].dropna().min().date()
         max_date = df["REVIEW_DATE"].dropna().max().date()
@@ -367,8 +349,6 @@ with tab_ask:
         index=0
     )
 
-    st.markdown("")
-
     if st.button("Answer from reviews", type="primary", disabled=not bool(user_question.strip())):
         with st.spinner("Thinking..."):
             dataset_brief = build_dataset_brief(df)
@@ -378,7 +358,11 @@ with tab_ask:
                 end_dt=scope_end_dt,
                 max_rows=12
             )
-            full_prompt = build_chat_prompt(user_question=user_question, dataset_brief=dataset_brief, review_snippets=snippets)
+            full_prompt = build_chat_prompt(
+                user_question=user_question,
+                dataset_brief=dataset_brief,
+                review_snippets=snippets
+            )
 
             try:
                 answer = cortex_complete(full_prompt, model=model)
